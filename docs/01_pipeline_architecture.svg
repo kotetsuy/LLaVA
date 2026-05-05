@@ -1,0 +1,83 @@
+<svg width="100%" viewBox="0 0 680 620" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .box-gray { fill: #F1EFE8; stroke: #5F5E5A; }
+  .box-teal { fill: #E1F5EE; stroke: #0F6E56; }
+  .box-purple { fill: #EEEDFE; stroke: #534AB7; }
+  .box-coral { fill: #FAECE7; stroke: #993C1D; }
+  .box-blue { fill: #E6F1FB; stroke: #185FA5; }
+  .t-teal { fill: #085041; }
+  .t-purple { fill: #3C3489; }
+  .t-coral { fill: #712B13; }
+  .t-blue { fill: #0C447C; }
+  .t-gray { fill: #444441; }
+  .ts-teal { fill: #0F6E56; }
+  .ts-purple { fill: #534AB7; }
+  .ts-coral { fill: #993C1D; }
+  .ts-blue { fill: #185FA5; }
+  .ts-gray { fill: #5F5E5A; }
+  text { font-family: -apple-system, "Helvetica Neue", sans-serif; }
+  .th { font-size: 14px; font-weight: 500; }
+  .ts { font-size: 12px; font-weight: 400; }
+  .arr { stroke: #5F5E5A; stroke-width: 1; fill: none; }
+</style>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<text class="th t-gray" x="40" y="32">NucBox EVO X2 (Ubuntu 24.04 + ROCm 7.2.2)</text>
+
+<rect class="box-gray" x="40" y="50" width="600" height="380" rx="14" stroke-width="0.5"/>
+
+<rect class="box-teal" x="60" y="80" width="170" height="60" rx="8" stroke-width="0.5"/>
+<text class="th t-teal" x="145" y="108" text-anchor="middle">Capture proc</text>
+<text class="ts ts-teal" x="145" y="126" text-anchor="middle">cv2 + SHM ring</text>
+
+<rect class="box-purple" x="280" y="80" width="170" height="60" rx="8" stroke-width="0.5"/>
+<text class="th t-purple" x="365" y="108" text-anchor="middle">YOLO11m proc</text>
+<text class="ts ts-purple" x="365" y="126" text-anchor="middle">ROCm PyTorch 30fps</text>
+
+<rect class="box-coral" x="280" y="170" width="170" height="60" rx="8" stroke-width="0.5"/>
+<text class="th t-coral" x="365" y="198" text-anchor="middle">VLM proc</text>
+<text class="ts ts-coral" x="365" y="216" text-anchor="middle">llama.cpp 0.5fps</text>
+
+<rect class="box-blue" x="490" y="125" width="130" height="70" rx="8" stroke-width="0.5"/>
+<text class="th t-blue" x="555" y="150" text-anchor="middle">aiortc server</text>
+<text class="ts ts-blue" x="555" y="168" text-anchor="middle">WebRTC + WS</text>
+<text class="ts ts-blue" x="555" y="184" text-anchor="middle">FastAPI</text>
+
+<text class="ts ts-gray" x="350" y="290" text-anchor="middle">同一ホスト内: SharedMemory + asyncio Queue</text>
+
+<rect class="box-gray" x="60" y="310" width="560" height="100" rx="8" stroke-width="0.5"/>
+<text class="th t-gray" x="340" y="338" text-anchor="middle">SharedMemory: latest_frame (1スロット上書き)</text>
+<text class="ts ts-gray" x="340" y="360" text-anchor="middle">YOLO/VLMは推論開始時にスナップショット → 古いフレームは破棄</text>
+<text class="ts ts-gray" x="340" y="382" text-anchor="middle">結果はasyncio.Queueでaiortcサーバへ (bbox: JSON, caption: JSON)</text>
+
+<line x1="230" y1="110" x2="276" y2="110" class="arr" marker-end="url(#arrow)"/>
+<line x1="230" y1="125" x2="276" y2="195" class="arr" marker-end="url(#arrow)"/>
+<line x1="450" y1="110" x2="486" y2="145" class="arr" marker-end="url(#arrow)"/>
+<line x1="450" y1="200" x2="486" y2="175" class="arr" marker-end="url(#arrow)"/>
+<line x1="145" y1="140" x2="145" y2="306" class="arr" marker-end="url(#arrow)"/>
+
+<text class="th t-gray" x="40" y="470">Chrome (低遅延WebRTC受信)</text>
+
+<rect class="box-gray" x="40" y="486" width="600" height="115" rx="14" stroke-width="0.5"/>
+
+<rect class="box-blue" x="60" y="510" width="170" height="70" rx="8" stroke-width="0.5"/>
+<text class="th t-blue" x="145" y="534" text-anchor="middle">video element</text>
+<text class="ts ts-blue" x="145" y="552" text-anchor="middle">WebRTC track</text>
+<text class="ts ts-blue" x="145" y="568" text-anchor="middle">生映像のみ</text>
+
+<rect class="box-purple" x="250" y="510" width="170" height="70" rx="8" stroke-width="0.5"/>
+<text class="th t-purple" x="335" y="534" text-anchor="middle">canvas overlay</text>
+<text class="ts ts-purple" x="335" y="552" text-anchor="middle">bbox描画</text>
+<text class="ts ts-purple" x="335" y="568" text-anchor="middle">WS push 30fps</text>
+
+<rect class="box-coral" x="440" y="510" width="180" height="70" rx="8" stroke-width="0.5"/>
+<text class="th t-coral" x="530" y="534" text-anchor="middle">caption div</text>
+<text class="ts ts-coral" x="530" y="552" text-anchor="middle">「これはなに？」</text>
+<text class="ts ts-coral" x="530" y="568" text-anchor="middle">WS push 0.5fps</text>
+
+<line x1="555" y1="195" x2="335" y2="506" class="arr" marker-end="url(#arrow)" stroke-dasharray="4 3"/>
+</svg>

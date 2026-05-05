@@ -1,0 +1,57 @@
+camera:
+  preferred:
+    - by_id: usb-Logitech_HD_Pro_Webcam_C920*
+    - vid_pid: "046d:0892"
+  fallback: any
+  format:
+    width: 1280
+    height: 720
+    fps: 30
+    fourcc_priority: [MJPG, YUYV]
+  output:
+    target: [1280, 720]
+    keep_aspect: true
+    fisheye_correct: false  # 魚眼補正は明示 ON のみ (機種別キャリブレ必要)
+
+shm:
+  name: webcam_latest
+  pixel_format: BGR  # cv2 ネイティブ。SVG の "RGB" は「圧縮していない生画素」の意で BGR を採用
+  read_timeout_ms: 500
+
+capture:
+  read_thread_timeout_ms: 500  # cv2.VideoCapture.read() ハング検知用 (4.4 参照)
+  open_retry_sec: 1.0
+
+yolo:
+  model: yolo11m.pt        # ultralytics が初回 predict 時に自動ダウンロード
+  device: cuda             # ROCm の HIP 層が CUDA API を翻訳するので "cuda" のまま
+  imgsz: 640               # HANDOFF 4.3: Ultralytics が内部で letterbox + 逆変換
+  conf: 0.25
+  iou: 0.45
+  half: true              # fp16。fp32 で 30fps が出れば false のままで OK
+
+server:
+  host: 0.0.0.0    # LAN 内の他デバイス (スマホ/別PC) からも開きたいので 0.0.0.0
+  port: 8080
+  # 同一 LAN 想定。必要なら ["stun:stun.l.google.com:19302"] 等を入れる
+  ice_servers: []
+
+vlm:
+  # NVIDIA Nemotron-3 Nano Omni 30B-A3B (Reasoning, Q4_K_XL)
+  # Step 4 (subprocess) の互換用にバイナリ・モデルパスは残す
+  binary: /home/araki/llama.cpp/build/bin/llama-mtmd-cli
+  model: /home/araki/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-UD-Q4_K_XL.gguf
+  mmproj: /home/araki/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/mmproj-F16.gguf
+  prompt: "この画像に写っているものや状況を、50字程度の自然な日本語1文で具体的に説明してください。"
+  ngl: 99                  # 全レイヤーをGPUに乗せる
+  ctx_size: 8192           # image embedding が長くなるため 4096 だと足りない場合あり
+  n_predict: 128           # 50字程度の日本語 = ~60-100 token、余裕で 128
+  temp: 0.2
+  extra_args: []           # 追加でllama.cppに渡したいフラグがあれば
+
+  # Step 7b: 本番は llama-server を別プロセスで起動して HTTP で叩く
+  server:
+    base_url: http://127.0.0.1:8081
+    cadence_sec: 2.0       # キャプション間隔 (HANDOFF: 0.5fps)
+    jpeg_quality: 90       # SHM frame -> JPEG -> base64 -> server
+

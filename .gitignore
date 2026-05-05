@@ -216,3 +216,23 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- LLaVA project specific ---------------------------------------------------
+# Tracked on purpose (defensive: don't let any pattern above accidentally hide
+# the design handoff or runtime config).
+
+# Local capture / inference output
+/output/
+/captures/
+*.mp4
+*.webm
+
+# Large model artifacts (keep weights out of the repo)
+*.gguf
+*.pt
+*.onnx
+*.safetensors
+
+# Claude
+.claude/
+

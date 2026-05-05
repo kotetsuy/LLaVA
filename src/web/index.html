@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLaVA Demo</title>
+  <style>
+    body {
+      margin: 0;
+      background: #0e0f12;
+      color: #d6d8de;
+      font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", system-ui, sans-serif;
+    }
+    .wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px;
+      gap: 8px;
+    }
+    .stage {
+      position: relative;
+      width: 100%;
+      max-width: 1280px;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border: 1px solid #2a2c33;
+    }
+    .stage video,
+    .stage canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    .stage canvas {
+      pointer-events: none;
+    }
+    video {
+      object-fit: contain;
+    }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 13px;
+      opacity: 0.75;
+      font-variant-numeric: tabular-nums;
+    }
+    .status.error { color: #f08; opacity: 1; }
+    .status.ok    { color: #6f8; opacity: 1; }
+    .caption {
+      width: 100%;
+      max-width: 1280px;
+      box-sizing: border-box;
+      background: rgba(20, 24, 32, 0.85);
+      border: 1px solid #2a2c33;
+      border-radius: 6px;
+      padding: 14px 18px;
+      font-size: 17px;
+      line-height: 1.55;
+      min-height: 56px;
+      transition: opacity 120ms linear;
+    }
+    .caption.fading { opacity: 0.25; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="overlay"></canvas>
+    </div>
+    <div class="status-row">
+      <span class="status" id="status">connecting…</span>
+      <span class="status" id="ws-status">bbox: idle</span>
+      <span class="status" id="caption-status">caption: idle</span>
+    </div>
+    <div class="caption" id="caption">(no caption yet)</div>
+  </div>
+
+  <script>
+    const $video  = document.getElementById('video');
+    const $status = document.getElementById('status');
+    const setStatus = (msg, cls = '') => {
+      $status.textContent = msg;
+      $status.className = 'status' + (cls ? ' ' + cls : '');
+    };
+
+    async function waitIceGatheringComplete(pc) {
+      if (pc.iceGatheringState === 'complete') return;
+      await new Promise(resolve => {
+        const check = () => {
+          if (pc.iceGatheringState === 'complete') {
+            pc.removeEventListener('icegatheringstatechange', check);
+            resolve();
+          }
+        };
+        pc.addEventListener('icegatheringstatechange', check);
+      });
+    }
+
+    async function connect() {
+      const pc = new RTCPeerConnection();
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      pc.addEventListener('track', (e) => {
+        $video.srcObject = e.streams[0];
+      });
+      pc.addEventListener('connectionstatechange', () => {
+        const s = pc.connectionState;
+        if (s === 'connected')         setStatus('streaming', 'ok');
+        else if (s === 'failed')       setStatus('connection failed', 'error');
+        else if (s === 'disconnected') setStatus('disconnected', 'error');
+        else                            setStatus(`connection: ${s}`);
+      });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await waitIceGatheringComplete(pc);
+
+      setStatus('exchanging SDP…');
+      const r = await fetch('/offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type,
+        }),
+      });
+      if (!r.ok) throw new Error(`/offer returned ${r.status}`);
+      const answer = await r.json();
+      await pc.setRemoteDescription(answer);
+    }
+
+    connect().catch(err => {
+      console.error(err);
+      setStatus('error: ' + err.message, 'error');
+    });
+  </script>
+  <script src="/static/overlay.js"></script>
+  <script src="/static/caption.js"></script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+<svg width="100%" viewBox="0 0 680 560" xmlns="http://www.w3.org/2000/svg">
+<style>
+  .box-gray { fill: #F1EFE8; stroke: #5F5E5A; }
+  .box-teal { fill: #E1F5EE; stroke: #0F6E56; }
+  .box-purple { fill: #EEEDFE; stroke: #534AB7; }
+  .box-coral { fill: #FAECE7; stroke: #993C1D; }
+  .box-blue { fill: #E6F1FB; stroke: #185FA5; }
+  .box-amber { fill: #FAEEDA; stroke: #854F0B; }
+  .t-teal { fill: #085041; }
+  .t-purple { fill: #3C3489; }
+  .t-coral { fill: #712B13; }
+  .t-blue { fill: #0C447C; }
+  .t-gray { fill: #444441; }
+  .t-amber { fill: #633806; }
+  .ts-teal { fill: #0F6E56; }
+  .ts-purple { fill: #534AB7; }
+  .ts-coral { fill: #993C1D; }
+  .ts-blue { fill: #185FA5; }
+  .ts-gray { fill: #5F5E5A; }
+  .ts-amber { fill: #854F0B; }
+  text { font-family: -apple-system, "Helvetica Neue", sans-serif; }
+  .th { font-size: 14px; font-weight: 500; }
+  .ts { font-size: 12px; font-weight: 400; }
+  .arr { stroke: #5F5E5A; stroke-width: 1; fill: none; }
+</style>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<text class="th t-gray" x="40" y="32">カメラ抽象化レイヤ (Camera Abstraction Layer)</text>
+
+<rect class="box-gray" x="40" y="50" width="200" height="180" rx="10" stroke-width="0.5"/>
+<text class="th t-gray" x="140" y="74" text-anchor="middle">物理層</text>
+
+<rect class="box-blue" x="60" y="92" width="160" height="36" rx="6" stroke-width="0.5"/>
+<text class="ts ts-blue" x="140" y="115" text-anchor="middle">Webcam (4:3 480p)</text>
+
+<rect class="box-blue" x="60" y="136" width="160" height="36" rx="6" stroke-width="0.5"/>
+<text class="ts ts-blue" x="140" y="159" text-anchor="middle">C920 (16:9 1080p)</text>
+
+<rect class="box-blue" x="60" y="180" width="160" height="36" rx="6" stroke-width="0.5"/>
+<text class="ts ts-blue" x="140" y="203" text-anchor="middle">魚眼/アクションカム</text>
+
+<rect class="box-teal" x="280" y="50" width="170" height="180" rx="10" stroke-width="0.5"/>
+<text class="th t-teal" x="365" y="74" text-anchor="middle">CAL (capture proc)</text>
+<text class="ts ts-teal" x="365" y="100" text-anchor="middle">1. v4l2列挙 + by-id</text>
+<text class="ts ts-teal" x="365" y="120" text-anchor="middle">2. format交渉</text>
+<text class="ts ts-teal" x="365" y="140" text-anchor="middle">3. MJPEG優先</text>
+<text class="ts ts-teal" x="365" y="160" text-anchor="middle">4. ホットプラグ監視</text>
+<text class="ts ts-teal" x="365" y="180" text-anchor="middle">5. 歪み補正(任意)</text>
+<text class="ts ts-teal" x="365" y="210" text-anchor="middle">→ 正規化フレーム</text>
+
+<rect class="box-amber" x="490" y="50" width="150" height="180" rx="10" stroke-width="0.5"/>
+<text class="th t-amber" x="565" y="74" text-anchor="middle">SHM (RGB)</text>
+<text class="ts ts-amber" x="565" y="100" text-anchor="middle">1280×720 固定</text>
+<text class="ts ts-amber" x="565" y="120" text-anchor="middle">letterbox済</text>
+<text class="ts ts-amber" x="565" y="148" text-anchor="middle">+ メタデータ</text>
+<text class="ts ts-amber" x="565" y="168" text-anchor="middle">- 元解像度</text>
+<text class="ts ts-amber" x="565" y="186" text-anchor="middle">- pad offset</text>
+<text class="ts ts-amber" x="565" y="206" text-anchor="middle">- timestamp</text>
+
+<line x1="220" y1="110" x2="276" y2="120" class="arr" marker-end="url(#arrow)"/>
+<line x1="220" y1="154" x2="276" y2="140" class="arr" marker-end="url(#arrow)"/>
+<line x1="220" y1="198" x2="276" y2="160" class="arr" marker-end="url(#arrow)"/>
+<line x1="450" y1="140" x2="486" y2="140" class="arr" marker-end="url(#arrow)"/>
+
+<text class="th t-gray" x="40" y="280">下流処理: 各モデルの要求サイズへ二段リサイズ</text>
+
+<rect class="box-amber" x="40" y="300" width="160" height="80" rx="8" stroke-width="0.5"/>
+<text class="th t-amber" x="120" y="328" text-anchor="middle">SHM 正規化</text>
+<text class="ts ts-amber" x="120" y="350" text-anchor="middle">1280×720</text>
+<text class="ts ts-amber" x="120" y="368" text-anchor="middle">letterbox済</text>
+
+<rect class="box-purple" x="260" y="300" width="170" height="80" rx="8" stroke-width="0.5"/>
+<text class="th t-purple" x="345" y="328" text-anchor="middle">YOLO11m</text>
+<text class="ts ts-purple" x="345" y="350" text-anchor="middle">640×640へletterbox</text>
+<text class="ts ts-purple" x="345" y="368" text-anchor="middle">bbox→元座標逆変換</text>
+
+<rect class="box-coral" x="470" y="300" width="170" height="80" rx="8" stroke-width="0.5"/>
+<text class="th t-coral" x="555" y="328" text-anchor="middle">VLM</text>
+<text class="ts ts-coral" x="555" y="350" text-anchor="middle">448×448へresize</text>
+<text class="ts ts-coral" x="555" y="368" text-anchor="middle">JPEG圧縮で受け渡し</text>
+
+<line x1="200" y1="340" x2="256" y2="340" class="arr" marker-end="url(#arrow)"/>
+<line x1="200" y1="350" x2="466" y2="350" class="arr" marker-end="url(#arrow)" stroke-dasharray="3 3"/>
+
+<text class="th t-gray" x="40" y="420">ホットプラグ対応: pyudev でデバイス監視</text>
+
+<rect class="box-gray" x="40" y="438" width="600" height="100" rx="10" stroke-width="0.5"/>
+<text class="ts ts-gray" x="340" y="464" text-anchor="middle">pyudev.Monitor で /dev/video* のadd/removeをsubscribe</text>
+<text class="ts ts-gray" x="340" y="486" text-anchor="middle">remove時: 黒フレーム + 「カメラ未接続」キャプションをChromeへ通知</text>
+<text class="ts ts-gray" x="340" y="508" text-anchor="middle">add時: 自動でreopen、優先デバイスを選び直してキャプチャ再開</text>
+<text class="ts ts-gray" x="340" y="525" text-anchor="middle">aiortcのVideoTrackは生かしたまま、内部のソースだけ差し替え</text>
+</svg>
