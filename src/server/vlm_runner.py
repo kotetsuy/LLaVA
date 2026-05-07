@@ -21,6 +21,22 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _has_japanese(text: str) -> bool:
+    """True if text contains any hiragana, katakana, or CJK ideograph."""
+    for ch in text:
+        c = ord(ch)
+        if 0x3040 <= c <= 0x309F or 0x30A0 <= c <= 0x30FF or 0x4E00 <= c <= 0x9FFF:
+            return True
+    return False
+
+
+_RETRY_PROMPT = (
+    "【日本語のみで回答してください】"
+    "この画像に写っているものや状況を、50字程度の自然な日本語1文で説明してください。"
+    "英語・ローマ字・他言語を含む回答は禁止です。日本語の文字のみで答えてください。"
+)
+
+
 class VlmRunner:
     def __init__(self, shm_name: str, vlm_cfg: dict[str, Any]) -> None:
         self._shm_name = shm_name
@@ -61,6 +77,7 @@ class VlmRunner:
         worker = VlmServerWorker(
             base_url=server_cfg.get("base_url", "http://127.0.0.1:8081"),
             prompt=self._vlm_cfg["prompt"],
+            system_prompt=self._vlm_cfg.get("system_prompt", ""),
             n_predict=self._vlm_cfg.get("n_predict", 96),
             temperature=self._vlm_cfg.get("temp", 0.2),
             jpeg_quality=jpeg_quality,
@@ -126,6 +143,16 @@ class VlmRunner:
 
                 t0 = time.monotonic()
                 result = worker.predict_jpeg(jpeg.tobytes())
+                if (
+                    result.returncode == 0
+                    and result.caption
+                    and not _has_japanese(result.caption)
+                ):
+                    log.info(
+                        "vlm-runner: non-Japanese caption %r — retrying with stricter prompt",
+                        result.caption[:80],
+                    )
+                    result = worker.predict_jpeg(jpeg.tobytes(), prompt=_RETRY_PROMPT)
                 inf_sec = time.monotonic() - t0
                 if result.returncode != 0:
                     log.warning(

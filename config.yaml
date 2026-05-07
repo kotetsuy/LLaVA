@@ -42,7 +42,10 @@ vlm:
   binary: /home/araki/llama.cpp/build/bin/llama-mtmd-cli
   model: /home/araki/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-UD-Q4_K_XL.gguf
   mmproj: /home/araki/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/mmproj-F16.gguf
-  prompt: "この画像に写っているものや状況を、50字程度の自然な日本語1文で具体的に説明してください。"
+  # 出力言語を強制するため system / user の二段構え。
+  # locale が en の環境でも英語に流されないよう、両方で日本語を明示する。
+  system_prompt: "あなたは必ず日本語のみで応答する画像説明アシスタントです。英語や他の言語、ローマ字、英単語の混在を一切禁止します。出力は常に日本語の文字（ひらがな・カタカナ・漢字）と日本語の句読点のみで構成してください。"
+  prompt: "この画像に写っているものや状況を、50字程度の自然な日本語1文で具体的に説明してください。出力は必ず日本語のみとし、英語・ローマ字・他言語は使わないでください。"
   ngl: 99                  # 全レイヤーをGPUに乗せる
   ctx_size: 8192           # image embedding が長くなるため 4096 だと足りない場合あり
   n_predict: 128           # 50字程度の日本語 = ~60-100 token、余裕で 128

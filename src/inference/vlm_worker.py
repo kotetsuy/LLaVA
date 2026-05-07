@@ -179,6 +179,7 @@ class VlmServerWorker:
 
     base_url: str = "http://127.0.0.1:8081"
     prompt: str = "これはなんですか？1〜2文の日本語で簡潔に答えてください。"
+    system_prompt: str = ""  # empty = no system message; set to lock output language
     n_predict: int = 96
     temperature: float = 0.2
     timeout: float = 60.0
@@ -193,19 +194,23 @@ class VlmServerWorker:
 
     def predict_jpeg(self, jpeg_bytes: bytes, prompt: str | None = None) -> VlmResult:
         b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+        messages: list[dict] = []
+        if self.system_prompt:
+            messages.append({"role": "system", "content": self.system_prompt})
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt if prompt is not None else self.prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                ],
+            }
+        )
         body = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt if prompt is not None else self.prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                        },
-                    ],
-                }
-            ],
+            "messages": messages,
             "max_tokens": self.n_predict,
             "temperature": self.temperature,
             "stream": False,
