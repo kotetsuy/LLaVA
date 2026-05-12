@@ -88,36 +88,59 @@
       $status.className = 'status' + (cls ? ' ' + cls : '');
     };
 
-    async function waitIceGatheringComplete(pc) {
+    // Wait up to `timeoutMs` for ICE gathering to complete, then proceed with
+    // whatever candidates we have. Local-only setups normally gather all host
+    // candidates within ~100 ms; if some interface stalls the gatherer (e.g.
+    // Wayland + multiple network interfaces) the page would hang here forever
+    // without a cap.
+    async function waitIceGatheringComplete(pc, timeoutMs = 1500) {
       if (pc.iceGatheringState === 'complete') return;
       await new Promise(resolve => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          pc.removeEventListener('icegatheringstatechange', check);
+          clearTimeout(timer);
+          resolve();
+        };
         const check = () => {
-          if (pc.iceGatheringState === 'complete') {
-            pc.removeEventListener('icegatheringstatechange', check);
-            resolve();
-          }
+          if (pc.iceGatheringState === 'complete') finish();
         };
         pc.addEventListener('icegatheringstatechange', check);
+        const timer = setTimeout(() => {
+          console.warn(`ICE gathering still ${pc.iceGatheringState} after ${timeoutMs}ms; proceeding`);
+          finish();
+        }, timeoutMs);
       });
     }
 
     async function connect() {
+      setStatus('creating peer connection…');
       const pc = new RTCPeerConnection();
       pc.addTransceiver('video', { direction: 'recvonly' });
 
       pc.addEventListener('track', (e) => {
+        console.log('ontrack', e.streams);
         $video.srcObject = e.streams[0];
+        $video.play().catch(err => console.warn('video.play() rejected:', err));
       });
       pc.addEventListener('connectionstatechange', () => {
         const s = pc.connectionState;
+        console.log('connectionState ->', s);
         if (s === 'connected')         setStatus('streaming', 'ok');
         else if (s === 'failed')       setStatus('connection failed', 'error');
         else if (s === 'disconnected') setStatus('disconnected', 'error');
         else                            setStatus(`connection: ${s}`);
       });
+      pc.addEventListener('iceconnectionstatechange', () => {
+        console.log('iceConnectionState ->', pc.iceConnectionState);
+      });
 
+      setStatus('creating offer…');
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      setStatus('gathering ICE…');
       await waitIceGatheringComplete(pc);
 
       setStatus('exchanging SDP…');
@@ -132,12 +155,25 @@
       if (!r.ok) throw new Error(`/offer returned ${r.status}`);
       const answer = await r.json();
       await pc.setRemoteDescription(answer);
+      return pc;
     }
 
-    connect().catch(err => {
-      console.error(err);
-      setStatus('error: ' + err.message, 'error');
-    });
+    async function connectWithRetry() {
+      let backoffMs = 1000;
+      while (true) {
+        try {
+          await connect();
+          return;
+        } catch (err) {
+          console.error('connect() failed:', err);
+          setStatus('error: ' + (err && err.message ? err.message : err) + ' — retrying', 'error');
+          await new Promise(r => setTimeout(r, backoffMs));
+          backoffMs = Math.min(backoffMs * 2, 5000);
+        }
+      }
+    }
+
+    connectWithRetry();
   </script>
   <script src="/static/overlay.js"></script>
   <script src="/static/caption.js"></script>

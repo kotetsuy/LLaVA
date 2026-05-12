@@ -14,8 +14,8 @@ set -euo pipefail
 SESSION=llava
 PROJECT_DIR="$HOME/LLaVA"
 LLAMA_BIN="$HOME/llama.cpp/build/bin/llama-server"
-VLM_MODEL="$HOME/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-UD-Q4_K_XL.gguf"
-VLM_MMPROJ="$HOME/nemotron-3/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-GGUF/mmproj-F16.gguf"
+VLM_MODEL="$HOME/nemotron-3/NVIDIA-Nemotron-3-Nano-Omni-30B-A3B-Reasoning-UD-Q4_K_XL.gguf"
+VLM_MMPROJ="$HOME/nemotron-3/mmproj-F16.gguf"
 URL="http://localhost:8080/"
 SERVER_TIMEOUT=30  # seconds to wait for the server before opening the browser
 

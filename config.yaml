@@ -1,7 +1,7 @@
 camera:
   preferred:
-    - by_id: usb-Logitech_HD_Pro_Webcam_C920*
-    - vid_pid: "046d:0892"
+    - by_id: usb-DC474C08_P050301_SN0002_2K_USB_Camera_DC474C08_P050301_SN0002*
+    - vid_pid: "2bdf:0297"
   fallback: any
   format:
     width: 1280
