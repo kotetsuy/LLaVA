@@ -1,6 +1,8 @@
-# LLaVA on ROCm — USB カメラ × YOLO11m × Nemotron Nano Omni × Chrome WebRTC
+# LLaVA on ROCm — USB カメラ × YOLO11m × Nemotron Nano Omni × Chrome MJPEG
 
-NucBox EVO X2 (Ryzen AI MAX+ 395 / Radeon 8060S, ROCm 7.2.1) 上で USB カメラ映像を Chrome ブラウザに低遅延 WebRTC 配信し、同じ映像に対して YOLO11m の物体検出 (30fps) と Nemotron Nano Omni による日本語キャプション (0.5fps) をリアルタイムオーバーレイするデモ。
+NucBox EVO X2 (Ryzen AI MAX+ 395 / Radeon 8060S, ROCm 7.2.1) 上で USB カメラ映像を Chrome ブラウザに MJPEG (`multipart/x-mixed-replace`) で配信し、同じ映像に対して YOLO11m の物体検出 (30fps) と Nemotron Nano Omni による日本語キャプション (0.5fps) をリアルタイムオーバーレイするデモ。
+
+> **転送経路について**: もともと WebRTC (aiortc) を使っていましたが、完全オフライン環境 (Wi-Fi OFF / インターネット非接続) では Chrome が ICE host candidate を 1 件も emit しなくなり接続不能になる事象があったため、ICE を必要としない MJPEG over HTTP に移行しました。LAN 越し配信も plain HTTP なのでそのまま動作します。
 
 設計の詳細は [`HANDOFFJ.md`](./HANDOFFJ.md) と [`TECHNICALJ.md`](./TECHNICALJ.md) を参照。
 
@@ -69,11 +71,13 @@ uv pip install -e .[yolo,onnx]
 
 `ultralytics` (YOLO11m を初回 predict 時に自動ダウンロード) と `onnx / onnxruntime` (CPU 版) が入ります。
 
-### 5. WebRTC (aiortc + FastAPI)
+### 5. サーバ依存 (FastAPI + uvicorn + requests)
 
 ```bash
 uv pip install -e .[webrtc]
 ```
+
+extra 名は歴史的経緯で `webrtc` のままですが、現行サーバは MJPEG 配信なので aiortc は実質未使用です (依存解決のために一緒にインストールされるだけ)。
 
 ### 6. ROCm 環境変数
 
@@ -129,7 +133,7 @@ cd ~/LLaVA
 
 1. tmux セッション `llava` を作成
 2. window 0: `uv run capture-run` (USB カメラ → SHM、Step 1+2)
-3. window 1: `uv run serve` (FastAPI + aiortc + YOLO bbox + VLM caption WS、Step 6+7)
+3. window 1: `uv run serve` (FastAPI + MJPEG `/stream.mjpg` + YOLO bbox + VLM caption WS、Step 6+7)
 4. window 2: `llama-server --reasoning off` (Nemotron 常駐、Step 7b)
 5. `http://localhost:8080/` がレスポンスを返すまで最大 30 秒待機
 6. Chrome を自動で開く
@@ -163,10 +167,10 @@ tmux attach -t llava            # ログを直接見る
 
 `./start_all.sh` 実行後、Chrome で `http://localhost:8080/` (または LAN 内別端末から `http://<NucBox の IP>:8080/`) を開くと:
 
-- 中央の `<video>` に USB カメラ映像 (1280x720, ~150ms 以下の遅延)
+- 中央の `<img src="/stream.mjpg">` に USB カメラ映像 (1280x720, MJPEG)
 - 上に半透明 `<canvas>` で YOLO の bbox (色分け、30fps、`person 92%` 形式のラベル)
 - 下に半透明ボックスで Nemotron の日本語キャプション (約 50 字、2 秒ごとに更新)
-- ステータス行に WebRTC 接続状態 / bbox WS / caption の inference 時間と t/s
+- ステータス行にストリーム状態 / bbox WS / caption の inference 時間と t/s
 
 llama-server がモデルをロードする最初の ~10 秒は caption が `(no caption yet)` のまま、その後更新が始まります。
 
@@ -213,9 +217,13 @@ v4l2-ctl --list-devices        # (要 sudo apt install v4l-utils)
 
 `config.yaml` の `camera.preferred[].by_id` が手元のカメラ名と一致しない場合は `fallback: any` 経由で適当に選ばれます。特定のカメラを優先したいときは `by_id: usb-Vendor_Model*` を編集。
 
-### `connection failed` が Chrome に出る
+### ブラウザに映像が出ない / ステータスが `stream error` のまま
 
-WebRTC の ICE ネゴシエーション失敗。多くは一時的で、`Ctrl-Shift-R` でハードリロードすれば回復します。LAN 別端末から繋がらない場合は `sudo ufw allow 8080` でファイアウォール開放。
+`http://localhost:8080/stream.mjpg` を直接開いて 200 で MJPEG が降ってくるかを確認してください。
+
+- 200 + 黒画面 → `capture-run` がまだ SEARCHING の可能性。`tmux attach -t llava` で window 0 (capture) を見て、`-> CAPTURING dev=...` と `30 fps` が出ているか確認。出ていなければ `/dev/v4l/by-id/` の symlink と `config.yaml` の `camera.preferred[].by_id` が一致しているか見る
+- 404 / 500 → serve window のログを確認 (`tmux attach -t llava` → Ctrl-b 1)
+- LAN 別端末から繋がらない場合は `sudo ufw allow 8080` でファイアウォール開放
 
 ### caption が空のまま (`(no caption yet)`)
 

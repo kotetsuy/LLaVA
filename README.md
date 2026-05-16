@@ -1,6 +1,8 @@
-# LLaVA on ROCm — USB camera × YOLO11m × Nemotron Nano Omni × Chrome WebRTC
+# LLaVA on ROCm — USB camera × YOLO11m × Nemotron Nano Omni × Chrome MJPEG
 
-A demo that runs on the NucBox EVO X2 (Ryzen AI MAX+ 395 / Radeon 8060S, ROCm 7.2.1): live USB-camera video is streamed to Chrome over low-latency WebRTC, with real-time YOLO11m bbox overlay (30 fps) and Japanese captions from Nemotron Nano Omni (0.5 fps).
+A demo that runs on the NucBox EVO X2 (Ryzen AI MAX+ 395 / Radeon 8060S, ROCm 7.2.1): live USB-camera video is streamed to Chrome over MJPEG (`multipart/x-mixed-replace`), with real-time YOLO11m bbox overlay (30 fps) and Japanese captions from Nemotron Nano Omni (0.5 fps).
+
+> **Note on transport**: this used to be a WebRTC (aiortc) demo, but on fully-offline networks (Wi-Fi off / no Internet) Chrome refuses to emit a single ICE host candidate, leaving the connection stuck. We migrated to MJPEG over HTTP, which needs no ICE at all and works on the LAN unchanged.
 
 For design details see [`HANDOFF.md`](./HANDOFF.md) and [`TECHNICAL.md`](./TECHNICAL.md).
 日本語版は [`READMEJ.md`](./READMEJ.md) / [`HANDOFFJ.md`](./HANDOFFJ.md) / [`TECHNICALJ.md`](./TECHNICALJ.md).
@@ -70,11 +72,13 @@ uv pip install -e .[yolo,onnx]
 
 This pulls in `ultralytics` (which auto-downloads YOLO11m on the first `predict`) and `onnx / onnxruntime` (CPU build).
 
-### 5. WebRTC (aiortc + FastAPI)
+### 5. Server dependencies (FastAPI + uvicorn + requests)
 
 ```bash
 uv pip install -e .[webrtc]
 ```
+
+The extra is still named `webrtc` for historical reasons; the current server streams MJPEG, so `aiortc` is installed but effectively unused.
 
 ### 6. ROCm environment variables
 
@@ -130,7 +134,7 @@ This single command:
 
 1. Creates the tmux session `llava`
 2. window 0: `uv run capture-run` (USB → SHM, Steps 1+2)
-3. window 1: `uv run serve` (FastAPI + aiortc + YOLO bbox + VLM caption WS, Steps 6+7)
+3. window 1: `uv run serve` (FastAPI + MJPEG `/stream.mjpg` + YOLO bbox + VLM caption WS, Steps 6+7)
 4. window 2: `llama-server --reasoning off` (resident Nemotron, Step 7b)
 5. Polls `http://localhost:8080/` for up to 30 seconds
 6. Opens Chrome automatically
@@ -164,10 +168,10 @@ Sends `Ctrl-C` to each window, waits 5 seconds, then `tmux kill-session`. If any
 
 After `./start_all.sh`, open `http://localhost:8080/` in Chrome (or `http://<NucBox-IP>:8080/` from another LAN host):
 
-- A `<video>` showing the live camera (1280×720, ≤150 ms latency)
+- An `<img src="/stream.mjpg">` showing the live camera (1280×720, MJPEG)
 - A semi-transparent `<canvas>` overlay with color-coded YOLO bboxes (30 fps; labels like `person 92%`)
 - A semi-transparent caption box below with the Nemotron Japanese caption (~50 chars, refreshed every 2 s)
-- A status row showing the WebRTC connection state, bbox WS state, and the latest VLM `inference_ms` and `t/s`
+- A status row showing the stream state, bbox WS state, and the latest VLM `inference_ms` and `t/s`
 
 Captions stay at `(no caption yet)` for the first ~10 s while llama-server loads the GGUF, then updates kick in.
 
@@ -214,9 +218,13 @@ v4l2-ctl --list-devices        # (sudo apt install v4l-utils)
 
 If your camera doesn't match `camera.preferred[].by_id` in `config.yaml`, the `fallback: any` policy still picks something. To force a specific camera, edit `by_id: usb-Vendor_Model*`.
 
-### Chrome shows `connection failed`
+### Browser shows a black image or status is stuck at `stream error`
 
-A WebRTC ICE failure. Most are transient — `Ctrl+Shift+R` to hard-reload usually fixes it. If you can't connect from another LAN host, open the firewall: `sudo ufw allow 8080`.
+Hit `http://localhost:8080/stream.mjpg` directly and confirm a 200 with MJPEG bytes:
+
+- 200 + black frame → `capture-run` is probably stuck in SEARCHING. `tmux attach -t llava` and check window 0 (capture) for `-> CAPTURING dev=...` and `30 fps`. If absent, verify `config.yaml`'s `camera.preferred[].by_id` matches the symlink under `/dev/v4l/by-id/`.
+- 404 / 500 → inspect the `serve` window (`tmux attach -t llava` → Ctrl-b 1).
+- Can't reach it from another LAN host → open the firewall: `sudo ufw allow 8080`.
 
 ### Caption stays empty (`(no caption yet)`)
 
