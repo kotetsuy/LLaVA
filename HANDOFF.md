@@ -1,4 +1,4 @@
-# USB camera → VLM/YOLO → Chrome WebRTC demo: design document
+# USB camera → VLM/YOLO → Chrome streaming demo: design document
 
 ## 0. About this document
 
@@ -7,6 +7,13 @@ A handoff from the design discussion done in Claude.ai (web) to Claude Code on L
 - `LLaVA設計図.pptx` — Chrome screen layout sketch (USB camera + "what is this?" window + YOLO bbox)
 - `01_pipeline_architecture.svg` — process split and IPC architecture
 - `02_camera_abstraction_layer.svg` — camera abstraction layer with the two-stage letterbox
+
+### Design ↔ implementation delta (added post-implementation)
+
+This document preserves the original Claude.ai design discussion verbatim. The notable change that emerged during implementation:
+
+- **The video transport is MJPEG (`multipart/x-mixed-replace`) over HTTP, not WebRTC (aiortc)**. On a fully offline LAN (Wi-Fi off, no Internet) Chrome refuses to emit even a single ICE host candidate, leaving the connection wedged in `connecting`. Since we cannot influence Chrome's gathering behavior we switched to a transport that needs no ICE at all. See §6 "Implementation note" at the bottom and `TECHNICAL.md` §5 for the full story.
+- Everything else (Capture / CAL / SHM / YOLO / VLM / WS bbox & caption) is implemented as described in this document.
 
 ## 1. What we want to build
 
@@ -130,6 +137,17 @@ Co-locating llama.cpp and PyTorch ROCm on the same GPU may cause both to slow do
 - `<canvas>` overlay: receives bbox over WS, draws at 30 fps
 - `<div>`: receives caption over WS, displays at 0.5 fps
 - "Always draw the latest bbox" sync is fine. For strict synchronization use `requestVideoFrameCallback` + PTS alignment
+
+### Implementation note: WebRTC → MJPEG
+
+Once implemented and run on an offline LAN we observed that Chrome does not emit a single ICE host candidate (`chrome://webrtc-internals` never fires `onicecandidate`; `iceState` stays at `new`). With Wi-Fi off and no non-loopback interface, Chrome's privacy logic abandons gathering. Patching aioice's loopback filter on the server side, adding a dummy STUN entry, and even implementing trickle ICE all proved useless because Chrome never produces a local candidate to pair with.
+
+We therefore replaced WebRTC with MJPEG over HTTP (`multipart/x-mixed-replace; boundary=frame`):
+
+- Server: `GET /stream.mjpg` reads SHM, runs `cv2.imencode('.jpg', ...)` off-thread, and yields each frame as a multipart chunk
+- Chrome: `<video>` becomes `<img src="/stream.mjpg">` with `onload` / `onerror` for a simple exponential-backoff reconnect
+
+No ICE, STUN, TURN, aiortc, or `RTCPeerConnection` — just plain HTTP, which works both on the LAN and offline. The latency penalty over WebRTC is real but acceptable for this demo. Details in `TECHNICAL.md` §5.
 
 ## 7. Recommended build order (important)
 

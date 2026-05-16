@@ -2,24 +2,26 @@
 
 This document explains how the design from [`HANDOFF.md`](./HANDOFF.md) was implemented, why each design choice was made, and the gotchas discovered along the way. For setup instructions see [`README.md`](./README.md). 日本語版は [`TECHNICALJ.md`](./TECHNICALJ.md).
 
+> **Note on transport**: the original design used WebRTC (aiortc) for video, but on a fully offline LAN (Wi-Fi off / no Internet) Chrome refuses to emit a single ICE host candidate and the connection wedges. We migrated to MJPEG (`multipart/x-mixed-replace`) over HTTP. See §5 and §7.4 for the full story.
+
 ---
 
 ## 1. System overview
 
 ![Pipeline architecture](./docs/01_pipeline_architecture.svg)
 
-A single NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1151, 48 GB unified) runs four concurrent components and serves Chrome over WebRTC + WebSockets.
+A single NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1151, 48 GB unified) runs four concurrent components and serves Chrome over MJPEG (`/stream.mjpg`) + WebSockets.
 
 | Component | Process | Input | Output |
 |---|---|---|---|
 | Capture | `uv run capture-run` | USB camera | SHM (1280×720 BGR, letterboxed) |
 | YOLO11m | A background thread inside `serve` | SHM | bbox JSON → `/ws/bbox` |
 | VLM | `llama-server --reasoning off` (separate process) | HTTP requests (image + prompt) from `serve`'s VlmRunner | caption JSON → `/ws/caption` |
-| aiortc server | `uv run serve` (FastAPI + uvicorn) | SHM | WebRTC video track + WS broadcast |
+| MJPEG server | `uv run serve` (FastAPI + uvicorn) | SHM | `/stream.mjpg` (multipart/x-mixed-replace) + WS broadcast |
 
 **Key design decisions**
 
-- **SHM holds exactly one "latest frame slot"**. Capture overwrites continuously; consumers (aiortc / yolo / vlm) snapshot (`np.array(copy=True)`) at the moment they begin processing. This structurally prevents stale-frame inference backlogs.
+- **SHM holds exactly one "latest frame slot"**. Capture overwrites continuously; consumers (MJPEG / yolo / vlm) snapshot (`np.array(copy=True)`) at the moment they begin processing. This structurally prevents stale-frame inference backlogs.
 - **Frames never travel in queues**. Only bbox / caption JSON flow via asyncio.Queue → WebSocket.
 - **VLM input is JPEG-encoded bytes**. We `cv2.imencode('.jpg', ...)` the raw SHM BGR and base64-post to llama-server's `/v1/chat/completions`.
 - **YOLO runs as a thread inside the `serve` process**. The original handoff suggested a separate process, but torch/CUDA releases the GIL inside its C++ kernels, so the asyncio event loop is not blocked. Step 5 measured 8 ms p50 inference at fp16 — the choice is sound.
@@ -61,7 +63,7 @@ We try the `cv2.VideoCapture.set(CAP_PROP_FOURCC, ...)` ladder in `MJPG → YUYV
   - `CAPTURING`: a separate `CaptureReader` daemon thread runs `cv2.VideoCapture.read()`; the main thread writes to SHM
 - `CaptureReader` exists because `cv2.VideoCapture.read()` can block when the device is yanked; the daemon thread reads continuously, and `cap.release()` on stop unsticks the read
 - An `add` event triggers an immediate rescan; a `remove` event for the active dev_path transitions to SEARCHING
-- The aiortc `ShmVideoTrack` reads through the SHM, so swapping cameras does not break the `RTCPeerConnection` (no Chrome video drop)
+- The MJPEG stream reads through the SHM, so swapping cameras does not break the `<img src="/stream.mjpg">` connection (the HTTP stream stays alive, with black frames bridging the gap until the live feed returns)
 
 ---
 
@@ -111,7 +113,7 @@ Reader:
 
 ### 3.3 Fixing the "occasional black flash"
 
-In the first version, the reader did 8 tight retries → returned `None` → `ShmVideoTrack` fell back to a black frame, producing a 1-frame black flash on Chrome. The cause:
+In the first version, the reader did 8 tight retries → returned `None` → the downstream consumer (then `ShmVideoTrack`, now the MJPEG generator) fell back to a black frame, producing a 1-frame black flash on Chrome. The cause:
 
 - The writer's "odd" residency is ≈ 500 µs (`np.copyto` over 2.6 MB)
 - The reader's tight 8-retry loop only spent ~8 µs total, giving up before the writer was done
@@ -119,7 +121,7 @@ In the first version, the reader did 8 tight retries → returned `None` → `Sh
 Fix:
 
 1. Insert `time.sleep(100us)` between retries in `read()`, raise the cap from 8 → 16
-2. Cache "last successful frame" in `ShmVideoTrack`; on `None` reuse the cache (with a 1-second TTL guard to detect a writer that died)
+2. Cache "last successful frame" downstream; on `None`, reuse the cache (with a 1-second TTL guard to detect a writer that died) — first added in `ShmVideoTrack`, mirrored in the current MJPEG generator
 
 After this, observed black-flash frequency is zero in normal use.
 
@@ -180,41 +182,69 @@ Output of `benchmark-concurrent --frames 600`. The notable finding: **fp16 widen
 
 ---
 
-## 5. WebRTC delivery (`src/server/`)
+## 5. Video delivery (`src/server/`)
 
-### 5.1 Video track (`webrtc_track.py`)
+### 5.1 Why we dropped WebRTC
+
+The original implementation used aiortc + `RTCPeerConnection` to serve a WebRTC video track. On the same LAN we assumed host candidates alone would be enough, no STUN/TURN required. Once the demo ran on an offline LAN (Wi-Fi off, no Internet), we hit a dead end:
+
+- `POST /offer` returned 200
+- aiortc transitioned to `connection state -> connecting`
+- …and never advanced — neither `connected` nor `failed`. The browser stayed black
+
+`chrome://webrtc-internals` showed that Chrome's `onicecandidate` **never fired**, and `iceState` remained `new`. Without a non-loopback interface, Chrome's WebRTC stack stops emitting any local host candidates at all. Things we tried and the outcomes:
+
+1. **Monkey-patch aioice's loopback filter** so the server publishes `127.0.0.1` as a host candidate → the server side now offered a usable candidate, but the browser still produced none, so no pair could form
+2. **Switch the page URL between `http://localhost:8080/` and `http://127.0.0.1:8080/`** → no change
+3. **Disable `chrome://flags/#enable-webrtc-hide-local-ips-with-mdns`** → no change
+4. **Pass an unreachable dummy STUN to `RTCPeerConnection({iceServers: [{urls: 'stun:127.0.0.1:3478'}]})`** → no change
+5. **Implement trickle ICE** (server `POST /candidate` + client `icecandidate` posting) → Chrome doesn't fire the event in the first place, so trickle has nothing to send
+
+Since we couldn't change Chrome's behavior, we switched to a transport that doesn't need ICE at all.
+
+### 5.2 MJPEG stream (`app.py`)
+
+`GET /stream.mjpg` returns a `StreamingResponse` with `multipart/x-mixed-replace; boundary=frame`:
 
 ```python
-class ShmVideoTrack(VideoStreamTrack):
-    async def recv(self) -> VideoFrame:
-        pts, time_base = await self.next_timestamp()    # aiortc paces 30 fps
-        # Lazy SHM attach (works even if capture-run starts later)
-        # SHM read → np.copyto → av.VideoFrame.from_ndarray(format='bgr24')
-        # On read failure use last_frame cache; falls back to black after a 1 s TTL
+@app.get("/stream.mjpg")
+async def stream_mjpg() -> StreamingResponse:
+    async def gen():
+        shm: FrameSHM | None = None
+        last_seq = -1
+        black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        while True:
+            t_start = time.monotonic()
+            if shm is None:                              # lazy attach
+                try: shm = FrameSHM.attach(shm_name)
+                except (FileNotFoundError, RuntimeError): pass
+            frame = black
+            if shm is not None and (got := shm.read()) is not None:
+                fresh, meta = got
+                if meta.seq != last_seq:
+                    frame = fresh; last_seq = meta.seq
+                else:
+                    frame = fresh
+            ok, jpeg = await asyncio.to_thread(
+                cv2.imencode, ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+            if ok:
+                yield (f"--frame\r\nContent-Type: image/jpeg\r\n"
+                       f"Content-Length: {len(jpeg)}\r\n\r\n").encode() + jpeg.tobytes() + b"\r\n"
+            await asyncio.sleep(max(0.0, frame_period - (time.monotonic() - t_start)))
+    return StreamingResponse(gen(), media_type="multipart/x-mixed-replace; boundary=frame", ...)
 ```
 
-- aiortc encodes on the CPU (VP8 default). 1280×720@30fps is comfortable on Ryzen AI MAX+ 395
-- ROCm VCN hardware encoders are not aiortc-compatible, so we don't try
-- `next_timestamp()` provides the 30 fps pacing for free
+Highlights:
 
-### 5.2 Signaling (`app.py`)
-
-The `POST /offer` handler is a minimal SDP exchange (~20 lines):
-
-```python
-@app.post("/offer")
-async def offer(payload: SdpPayload):
-    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=[]))
-    pc.addTrack(ShmVideoTrack(...))
-    await pc.setRemoteDescription(RTCSessionDescription(sdp=payload.sdp, type=payload.type))
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-    return {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
-```
-
-Same-LAN, so no STUN/TURN — host candidates suffice. `config.yaml > server.ice_servers` is empty by default; add a STUN URL there if you need it.
+- **Lazy attach** — capture-run can start after the server; until SHM exists we emit `black` to keep the HTTP stream alive
+- **JPEG encoding off-thread** — `cv2.imencode` is CPU-heavy, so we hand it to `asyncio.to_thread` (Python 3.9+) to keep the event loop responsive
+- **Rate limit** — `config.yaml > camera.format.fps` (= 30) becomes `frame_period`, enforced via `asyncio.sleep`
+- **Quality** — `config.yaml > server.mjpeg_quality` (default 80). At 1280×720 a single frame is ~80–120 KB, i.e. ~20–30 Mbps at 30 fps
+- **No ICE / STUN / TURN** — plain HTTP, so the LAN and offline cases behave the same way
 
 ### 5.3 WS broadcast (`ws_broadcaster.py`, `yolo_runner.py`, `vlm_runner.py`)
+
+The WebRTC → MJPEG migration left these untouched:
 
 - `WsBroadcaster`: client set + asyncio Lock + JSON broadcast. Drops clients that fail to send
 - `YoloRunner`: daemon thread. SHM read → predict → updates a thread-safe `_latest = {...}` slot
@@ -224,9 +254,14 @@ Same-LAN, so no STUN/TURN — host candidates suffice. `config.yaml > server.ice
 
 ### 5.4 Frontend (`src/web/`)
 
-- A 3-layer stack: `<video>` (WebRTC), `<canvas>` (bbox), semi-transparent `<div>` (caption)
-- `<canvas>` has fixed `width=1280 height=720` and is positioned absolutely over the video. Bbox coords are CAL-normalized, so a single CSS scaling step is all the browser needs
+- A 3-layer stack: `<img id="stream" src="/stream.mjpg">` (MJPEG), `<canvas>` (bbox), semi-transparent `<div>` (caption)
+- `<canvas>` has fixed `width=1280 height=720` and is positioned absolutely over the `<img>`. Bbox coords are CAL-normalized, so a single CSS scaling step is all the browser needs
+- `<img>` sets the status row to `streaming` on `load`; on `error` it reconnects with exponential backoff (capped at 5 s) and a `?t=<ts>` cache-buster on the `src`
 - Both `overlay.js` and `caption.js` reconnect on WebSocket disconnect with exponential backoff (capped at 5 s)
+
+### 5.5 What we left in the tree
+
+`src/server/webrtc_track.py` is no longer imported but remains in the repo, in case a future deployment can provide a STUN/TURN server and we want to revisit WebRTC. `pyproject.toml`'s `[webrtc]` extra still installs `aiortc` for the same reason — the current `serve` simply doesn't import it.
 
 ---
 
@@ -269,10 +304,11 @@ Sends `Ctrl-C` to each window → waits 5 s → `tmux kill-session`. Any survivo
 - **Naively regexing `prompt eval time` and `eval time` matches the same line twice.** A `(?<!prompt )eval time` negative lookbehind disambiguates
 - **`llama-server`'s default `--reasoning auto` causes *-Reasoning models to burn `n_predict` on `<think>` tokens.** `--reasoning off` is required
 
-### 7.4 WebRTC / frontend
+### 7.4 Video transport / frontend
 
-- **Chrome JS cache.** When updating `caption.js`, force a hard reload (Ctrl+Shift+R)
-- **POSTing the offer before ICE gathering completes loses candidates.** `await iceGatheringState === 'complete'`
+- **Chrome won't emit any ICE candidates when fully offline.** Wi-Fi off + only loopback → host candidate gathering is silently abandoned (`chrome://webrtc-internals` never fires `onicecandidate`, `iceState` stuck at `new`). Patching aioice's loopback exclusion or implementing trickle ICE does not help, because the browser itself produces nothing to pair against. We migrated to MJPEG specifically to dodge this — see §5.1
+- **MJPEG bandwidth is ~20–30 Mbps per client.** At 1280×720 / 30 fps / JPEG quality 80 a frame is ~80–120 KB. Bandwidth and `cv2.imencode` CPU both scale linearly with the number of connected browsers
+- **Chrome JS cache.** When `caption.js` or similar fails to refresh, hard-reload (Ctrl+Shift+R). For the MJPEG endpoint a `?t=<ts>` query is a reliable cache-bust
 - **Sign convention in metric reports.** Showing "fps decreased" as `+71.5%` is misleading. Standardize on "+ = better, - = worse"
 
 ---
