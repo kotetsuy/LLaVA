@@ -26,7 +26,7 @@
       background: #000;
       border: 1px solid #2a2c33;
     }
-    .stage video,
+    .stage img,
     .stage canvas {
       position: absolute;
       inset: 0;
@@ -34,11 +34,11 @@
       height: 100%;
       display: block;
     }
+    .stage img {
+      object-fit: contain;
+    }
     .stage canvas {
       pointer-events: none;
-    }
-    video {
-      object-fit: contain;
     }
     .status-row {
       display: flex;
@@ -69,7 +69,7 @@
 <body>
   <div class="wrap">
     <div class="stage">
-      <video id="video" autoplay playsinline muted></video>
+      <img id="stream" src="/stream.mjpg" alt="">
       <canvas id="overlay"></canvas>
     </div>
     <div class="status-row">
@@ -81,99 +81,29 @@
   </div>
 
   <script>
-    const $video  = document.getElementById('video');
+    // Plain MJPEG over multipart/x-mixed-replace. The browser keeps the
+    // connection open and swaps in each new JPEG frame automatically — no
+    // WebRTC / ICE / UDP, so this works offline.
+    const $img = document.getElementById('stream');
     const $status = document.getElementById('status');
     const setStatus = (msg, cls = '') => {
       $status.textContent = msg;
       $status.className = 'status' + (cls ? ' ' + cls : '');
     };
 
-    // Wait up to `timeoutMs` for ICE gathering to complete, then proceed with
-    // whatever candidates we have. Local-only setups normally gather all host
-    // candidates within ~100 ms; if some interface stalls the gatherer (e.g.
-    // Wayland + multiple network interfaces) the page would hang here forever
-    // without a cap.
-    async function waitIceGatheringComplete(pc, timeoutMs = 1500) {
-      if (pc.iceGatheringState === 'complete') return;
-      await new Promise(resolve => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          pc.removeEventListener('icegatheringstatechange', check);
-          clearTimeout(timer);
-          resolve();
-        };
-        const check = () => {
-          if (pc.iceGatheringState === 'complete') finish();
-        };
-        pc.addEventListener('icegatheringstatechange', check);
-        const timer = setTimeout(() => {
-          console.warn(`ICE gathering still ${pc.iceGatheringState} after ${timeoutMs}ms; proceeding`);
-          finish();
-        }, timeoutMs);
-      });
-    }
-
-    async function connect() {
-      setStatus('creating peer connection…');
-      const pc = new RTCPeerConnection();
-      pc.addTransceiver('video', { direction: 'recvonly' });
-
-      pc.addEventListener('track', (e) => {
-        console.log('ontrack', e.streams);
-        $video.srcObject = e.streams[0];
-        $video.play().catch(err => console.warn('video.play() rejected:', err));
-      });
-      pc.addEventListener('connectionstatechange', () => {
-        const s = pc.connectionState;
-        console.log('connectionState ->', s);
-        if (s === 'connected')         setStatus('streaming', 'ok');
-        else if (s === 'failed')       setStatus('connection failed', 'error');
-        else if (s === 'disconnected') setStatus('disconnected', 'error');
-        else                            setStatus(`connection: ${s}`);
-      });
-      pc.addEventListener('iceconnectionstatechange', () => {
-        console.log('iceConnectionState ->', pc.iceConnectionState);
-      });
-
-      setStatus('creating offer…');
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      setStatus('gathering ICE…');
-      await waitIceGatheringComplete(pc);
-
-      setStatus('exchanging SDP…');
-      const r = await fetch('/offer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sdp: pc.localDescription.sdp,
-          type: pc.localDescription.type,
-        }),
-      });
-      if (!r.ok) throw new Error(`/offer returned ${r.status}`);
-      const answer = await r.json();
-      await pc.setRemoteDescription(answer);
-      return pc;
-    }
-
-    async function connectWithRetry() {
-      let backoffMs = 1000;
-      while (true) {
-        try {
-          await connect();
-          return;
-        } catch (err) {
-          console.error('connect() failed:', err);
-          setStatus('error: ' + (err && err.message ? err.message : err) + ' — retrying', 'error');
-          await new Promise(r => setTimeout(r, backoffMs));
-          backoffMs = Math.min(backoffMs * 2, 5000);
-        }
-      }
-    }
-
-    connectWithRetry();
+    let reconnectDelay = 500;
+    $img.addEventListener('load', () => {
+      reconnectDelay = 500;
+      setStatus('streaming', 'ok');
+    });
+    $img.addEventListener('error', () => {
+      setStatus('stream error — reconnecting', 'error');
+      setTimeout(() => {
+        // Cache-buster forces a fresh request after the server comes back.
+        $img.src = `/stream.mjpg?t=${Date.now()}`;
+      }, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 5000);
+    });
   </script>
   <script src="/static/overlay.js"></script>
   <script src="/static/caption.js"></script>

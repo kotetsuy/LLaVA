@@ -1,8 +1,10 @@
-"""FastAPI + aiortc signaling server.
+"""FastAPI server: SHM → MJPEG over HTTP, plus YOLO/VLM WebSocket channels.
 
-Step 6: serves ``index.html`` and exchanges SDP at ``POST /offer``.
-Step 7a: adds an in-process YOLO inference thread + ``/ws/bbox`` broadcast.
-Step 7b (planned): ``/ws/caption`` driven by VLM (llama-server transition).
+WebRTC was the original transport (see ``webrtc_track.py``) but it fails in
+fully offline LANs because Chrome refuses to gather even a loopback ICE
+candidate when no internet-reachable interface is present. We fall back to
+``multipart/x-mixed-replace`` MJPEG: plain HTTP, no ICE, works as long as
+the page can be fetched.
 """
 
 from __future__ import annotations
@@ -10,18 +12,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import cv2
+import numpy as np
 import yaml
-from aiortc import RTCConfiguration, RTCIceServer, RTCPeerConnection, RTCSessionDescription
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+
+from src.capture.shm_writer import FrameSHM
 
 from .vlm_runner import VlmRunner
-from .webrtc_track import ShmVideoTrack
 from .ws_broadcaster import WsBroadcaster
 from .yolo_runner import YoloRunner
 
@@ -30,7 +34,6 @@ log = logging.getLogger("server")
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 CONFIG_PATH = Path(os.environ.get("LLAVA_CONFIG", "config.yaml"))
 
-_pcs: set[RTCPeerConnection] = set()
 _bbox_ws = WsBroadcaster(name="ws/bbox")
 _caption_ws = WsBroadcaster(name="ws/caption")
 _yolo_runner: YoloRunner | None = None
@@ -42,12 +45,6 @@ def _load_config() -> dict:
 
 
 async def _broadcast_bbox_loop(period: float = 1.0 / 30) -> None:
-    """Push the latest detections to /ws/bbox subscribers at ~30 fps.
-
-    Skips when no clients are connected (so YoloRunner still runs but we
-    don't waste JSON encoding) and dedups on ``frame_seq`` so we never
-    emit the same detection twice.
-    """
     last_seq = -1
     try:
         while True:
@@ -66,11 +63,6 @@ async def _broadcast_bbox_loop(period: float = 1.0 / 30) -> None:
 
 
 async def _broadcast_caption_loop(period: float = 0.5) -> None:
-    """Push fresh captions to /ws/caption subscribers, polling at 2 Hz.
-
-    VLM produces ~0.5 fps; we poll faster than that so a new caption gets
-    out within ~500 ms of being computed. Dedups on ``ts_ns``.
-    """
     last_ts = -1
     try:
         while True:
@@ -105,15 +97,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        log.info("server shutting down; closing %d peer connection(s)", len(_pcs))
+        log.info("server shutting down")
         for task in (bbox_task, caption_task):
             task.cancel()
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        await asyncio.gather(*(pc.close() for pc in _pcs), return_exceptions=True)
-        _pcs.clear()
         if _yolo_runner is not None:
             _yolo_runner.stop()
             _yolo_runner = None
@@ -122,13 +112,8 @@ async def lifespan(app: FastAPI):
             _vlm_runner = None
 
 
-app = FastAPI(lifespan=lifespan, title="LLaVA WebRTC demo")
+app = FastAPI(lifespan=lifespan, title="LLaVA MJPEG demo")
 app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")
-
-
-class SdpPayload(BaseModel):
-    sdp: str
-    type: str
 
 
 @app.get("/")
@@ -136,40 +121,82 @@ async def index() -> FileResponse:
     return FileResponse(str(WEB_DIR / "index.html"))
 
 
-@app.post("/offer")
-async def offer(payload: SdpPayload) -> JSONResponse:
+_MJPEG_BOUNDARY = "frame"
+
+
+@app.get("/stream.mjpg")
+async def stream_mjpg() -> StreamingResponse:
+    """Multipart MJPEG stream sourced from the capture-run SHM frame.
+
+    Works offline (plain HTTP, no ICE) — usable directly as
+    ``<img src="/stream.mjpg">``.
+    """
     cfg = _load_config()
+    shm_name = cfg["shm"]["name"]
+    fps_cap = float(cfg["camera"]["format"].get("fps", 30))
+    frame_period = 1.0 / fps_cap if fps_cap > 0 else 1.0 / 30
+    jpeg_quality = int(cfg.get("server", {}).get("mjpeg_quality", 80))
+    target_w, target_h = cfg["camera"]["output"]["target"]
+    boundary = _MJPEG_BOUNDARY
 
-    ice_servers = [RTCIceServer(urls=u) for u in cfg.get("server", {}).get("ice_servers", [])]
-    pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_servers))
-    _pcs.add(pc)
-    log.info("new peer connection (now %d total)", len(_pcs))
+    async def gen():
+        shm: FrameSHM | None = None
+        last_seq = -1
+        black = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        next_attach_attempt = 0.0
+        try:
+            while True:
+                t_start = time.monotonic()
 
-    @pc.on("connectionstatechange")
-    async def _on_state_change() -> None:
-        log.info("connection state -> %s", pc.connectionState)
-        if pc.connectionState in ("failed", "closed"):
-            await pc.close()
-            _pcs.discard(pc)
+                if shm is None and t_start >= next_attach_attempt:
+                    try:
+                        shm = FrameSHM.attach(shm_name)
+                        log.info("mjpeg: attached SHM %s", shm_name)
+                    except (FileNotFoundError, RuntimeError) as e:
+                        log.debug("mjpeg: SHM not yet available (%s)", e)
+                        next_attach_attempt = t_start + 1.0
 
-    try:
-        target = cfg["camera"]["output"]["target"]
-        track = ShmVideoTrack(
-            shm_name=cfg["shm"]["name"], frame_h=target[1], frame_w=target[0]
-        )
-        pc.addTrack(track)
+                frame = black
+                if shm is not None:
+                    got = shm.read()
+                    if got is not None:
+                        fresh, meta = got
+                        if meta.seq != last_seq:
+                            frame = fresh
+                            last_seq = meta.seq
+                        else:
+                            frame = fresh  # re-emit last good frame to keep stream alive
 
-        sdp_offer = RTCSessionDescription(sdp=payload.sdp, type=payload.type)
-        await pc.setRemoteDescription(sdp_offer)
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-    except Exception:
-        await pc.close()
-        _pcs.discard(pc)
-        raise
+                ok, jpeg = await asyncio.to_thread(
+                    cv2.imencode,
+                    ".jpg",
+                    frame,
+                    [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality],
+                )
+                if ok:
+                    jpeg_bytes = jpeg.tobytes()
+                    yield (
+                        f"--{boundary}\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(jpeg_bytes)}\r\n\r\n"
+                    ).encode("ascii") + jpeg_bytes + b"\r\n"
 
-    return JSONResponse(
-        {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type}
+                elapsed = time.monotonic() - t_start
+                sleep_for = max(0.0, frame_period - elapsed)
+                await asyncio.sleep(sleep_for)
+        except asyncio.CancelledError:
+            raise
+        finally:
+            if shm is not None:
+                try:
+                    shm.close()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("mjpeg: shm.close() raised %s", e)
+
+    return StreamingResponse(
+        gen(),
+        media_type=f"multipart/x-mixed-replace; boundary={boundary}",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
 
@@ -178,8 +205,6 @@ async def ws_bbox(ws: WebSocket) -> None:
     await ws.accept()
     await _bbox_ws.add(ws)
     try:
-        # No client-to-server messages expected; receive_text() will raise
-        # on disconnect, ending the loop cleanly.
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
