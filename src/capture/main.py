@@ -51,7 +51,12 @@ def _build_black_frame(w: int, h: int) -> np.ndarray:
 
 def _try_open(cam_cfg: dict, fmt_cfg: dict):
     devs = enumerate_devices()
-    chosen = select_device(devs, cam_cfg.get("preferred", []), cam_cfg.get("fallback", "any"))
+    chosen = select_device(
+        devs,
+        cam_cfg.get("preferred", []),
+        cam_cfg.get("fallback", "any"),
+        format_hint=fmt_cfg,
+    )
     if chosen is None:
         return None
     return open_camera(

@@ -59,11 +59,33 @@ def enumerate_devices(context: pyudev.Context | None = None) -> list[CameraDevic
     return out
 
 
-def is_capture_capable(dev_path: str) -> bool:
+def is_capture_capable(
+    dev_path: str,
+    format_hint: dict | None = None,
+) -> bool:
+    """Probe whether ``dev_path`` can deliver a frame.
+
+    Some UVC cameras (e.g. Jieli USB PHY 2.0) refuse to stream at the V4L2
+    driver default and only return frames once an explicit fourcc/resolution
+    has been negotiated. ``format_hint`` lets callers thread the configured
+    capture format through so the probe matches what the main loop will use.
+    """
     cap = cv2.VideoCapture(dev_path, cv2.CAP_V4L2)
     try:
         if not cap.isOpened():
             return False
+        if format_hint:
+            from .format_negotiator import configure as _configure  # noqa: PLC0415
+            try:
+                _configure(
+                    cap,
+                    fourcc_priority=format_hint.get("fourcc_priority", ["MJPG"]),
+                    width=int(format_hint.get("width", 1280)),
+                    height=int(format_hint.get("height", 720)),
+                    fps=int(format_hint.get("fps", 30)),
+                )
+            except Exception as e:  # noqa: BLE001
+                log.debug("format hint apply failed on %s: %s", dev_path, e)
         ok, _ = cap.read()
         return bool(ok)
     finally:
@@ -85,15 +107,18 @@ def select_device(
     preferred: list[dict],
     fallback: str = "any",
     capture_check: bool = True,
+    format_hint: dict | None = None,
 ) -> CameraDevice | None:
     """Pick the first preferred + capture-capable device, else fallback policy."""
     devs = list(devices)
     for pref in preferred:
         for d in devs:
-            if _matches(d, pref) and (not capture_check or is_capture_capable(d.dev_path)):
+            if _matches(d, pref) and (
+                not capture_check or is_capture_capable(d.dev_path, format_hint)
+            ):
                 return d
     if fallback == "any":
         for d in devs:
-            if not capture_check or is_capture_capable(d.dev_path):
+            if not capture_check or is_capture_capable(d.dev_path, format_hint):
                 return d
     return None
