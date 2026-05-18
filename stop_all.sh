@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Stop the LLaVA tmux session created by start_all.sh.
 # Sends Ctrl-C to each window for graceful shutdown (capture releases the
-# camera, serve closes WebRTC peer connections, llama-server unloads), waits,
-# then kill-sessions whatever is left.
+# camera, serve closes the MJPEG stream and WebSocket channels, llama-server
+# unloads), waits, then kill-sessions whatever is left.
 
 set -uo pipefail   # not -e: we want to continue on tmux errors
 
