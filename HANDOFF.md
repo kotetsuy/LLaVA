@@ -96,10 +96,16 @@ This is the most important part of the new requirements.
 ```yaml
 # config.yaml
 camera:
-  preferred:
-    - by_id: usb-Logitech_HD_Pro_Webcam_C920*
-    - vid_pid: "046d:0892"
-  fallback: any
+  preferred:                       # ordered priority list; one camera per entry
+    - name: logitech-c920          # name is a log-only label (optional)
+      by_id: usb-Logitech_HD_Pro_Webcam_C920*
+    - name: logitech-vidpid
+      vid_pid: "046d:0892"
+    # - name: second-cam           # add more cameras here; absent ones are ignored
+    #   vid_pid: "1124:2925"
+  fallback: any                    # any = use an unlisted camera too; none = preferred-only
+  preempt: true                    # hot-swap to a higher-priority camera mid-run
+  preempt_settle_sec: 1.0          # wait for the device to settle after an add event
   format:
     width: 1280
     height: 720

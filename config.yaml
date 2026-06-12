@@ -1,8 +1,18 @@
 camera:
+  # 上から優先順位。1 エントリ = 1 台のカメラを by_id か vid_pid のどちらかで指定する。
+  # 接続中のカメラのうち、ここで最も上にマッチした 1 台だけを画面に流す。
+  # 2 台目以降は下に追記する (例の logicool 行を参照)。
   preferred:
-    - by_id: usb-Jieli_Technology_USB_PHY_2.0-video-index0
-    - vid_pid: "1124:2925"
-  fallback: any
+    - name: jieli-webcam      # name はログ表示用の任意ラベル (選択ロジックには不使用)
+      by_id: usb-Jieli_Technology_USB_PHY_2.0-video-index0
+    - name: jieli-webcam-vidpid   # 同一カメラの別名マッチも従来どおり並べられる
+      vid_pid: "1124:2925"
+    # - name: logicool-c920   # ← 2 台目はこう書く。接続されていなければ無視される
+    #   vid_pid: "046d:0892"
+  fallback: any        # any  = preferred 不一致のカメラでも繋ぐ (従来の挙動)
+                       # none = preferred にマッチするカメラのみ使う
+  preempt: true        # 配信中でも、より優先度の高いカメラが挿されたら自動で乗り換える
+  preempt_settle_sec: 1.0  # add イベント後にデバイス安定化を待つ秒数 (この間ブロックはしない)
   format:
     width: 1280
     height: 720

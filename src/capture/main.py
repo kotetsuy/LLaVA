@@ -23,8 +23,8 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-from .capture_session import CaptureReader, open_camera
-from .device_manager import enumerate_devices, select_device
+from .capture_session import CaptureReader, OpenedCamera, open_camera
+from .device_manager import enumerate_devices, select_device_ranked
 from .frame_normalizer import letterbox
 from .hotplug_watcher import HotplugEvent, HotplugWatcher
 from .shm_writer import FrameSHM
@@ -49,23 +49,47 @@ def _build_black_frame(w: int, h: int) -> np.ndarray:
     return np.zeros((h, w, 3), dtype=np.uint8)
 
 
-def _try_open(cam_cfg: dict, fmt_cfg: dict):
+def _rank_value(rank: int | None) -> float:
+    """Order ranks for comparison: a ``None`` (fallback) rank is lowest priority."""
+    return float("inf") if rank is None else float(rank)
+
+
+def _rank_name(preferred: list[dict], rank: int | None) -> str:
+    """Human-readable label for a rank, for logging only."""
+    if rank is None:
+        return "(fallback)"
+    if 0 <= rank < len(preferred):
+        return preferred[rank].get("name") or f"preferred[{rank}]"
+    return f"preferred[{rank}]"
+
+
+def _try_open(
+    cam_cfg: dict,
+    fmt_cfg: dict,
+    exclude_dev_paths: tuple[str, ...] = (),
+) -> tuple[OpenedCamera, int | None] | None:
+    """Select + open the best available camera, returning ``(opened, rank)``."""
     devs = enumerate_devices()
-    chosen = select_device(
+    result = select_device_ranked(
         devs,
         cam_cfg.get("preferred", []),
         cam_cfg.get("fallback", "any"),
         format_hint=fmt_cfg,
+        exclude_dev_paths=exclude_dev_paths,
     )
-    if chosen is None:
+    if result is None:
         return None
-    return open_camera(
+    chosen, rank = result
+    opened = open_camera(
         chosen,
         fourcc_priority=fmt_cfg["fourcc_priority"],
         width=fmt_cfg["width"],
         height=fmt_cfg["height"],
         fps=fmt_cfg["fps"],
     )
+    if opened is None:
+        return None
+    return opened, rank
 
 
 def main() -> int:
@@ -91,6 +115,9 @@ def main() -> int:
     target_w, target_h = out_cfg["target"]
     target_fps = float(fmt_cfg["fps"])
     frame_period = 1.0 / target_fps if target_fps > 0 else 1.0 / 30
+    preferred = cam_cfg.get("preferred", [])
+    preempt_enabled = bool(cam_cfg.get("preempt", True))
+    preempt_settle_sec = float(cam_cfg.get("preempt_settle_sec", 1.0))
 
     # initial inventory log
     initial = enumerate_devices()
@@ -123,32 +150,75 @@ def main() -> int:
 
     state = State.SEARCHING
     reader: CaptureReader | None = None
+    current_rank: int | None = None
+    pending_preempt_at: float | None = None  # CAPTURING-state preemption timer
     last_frame_ts: float = -1.0
     last_scan_ts: float = -RESCAN_INTERVAL_SEC  # force first scan immediately
     fps_window = 0
     fps_t0 = time.monotonic()
 
     def _enter_searching(reason: str) -> None:
-        nonlocal state, reader, last_frame_ts
+        nonlocal state, reader, last_frame_ts, current_rank, pending_preempt_at
         log.info("-> SEARCHING (%s)", reason)
         if reader is not None:
             reader.stop()
             reader = None
+        current_rank = None
+        pending_preempt_at = None
         last_frame_ts = -1.0
         state = State.SEARCHING
 
-    def _enter_capturing(new_reader: CaptureReader) -> None:
-        nonlocal state, reader
+    def _enter_capturing(new_reader: CaptureReader, rank: int | None) -> None:
+        nonlocal state, reader, current_rank, last_frame_ts
         log.info(
-            "-> CAPTURING dev=%s by_id=%s vid:pid=%s:%s",
+            "-> CAPTURING dev=%s by_id=%s vid:pid=%s:%s rank=%s name=%s",
             new_reader.device.dev_path,
             new_reader.device.by_id,
             new_reader.device.vid,
             new_reader.device.pid,
+            rank,
+            _rank_name(preferred, rank),
         )
         new_reader.start()
         reader = new_reader
+        current_rank = rank
+        last_frame_ts = -1.0
         state = State.CAPTURING
+
+    def _maybe_preempt() -> None:
+        """Re-evaluate during CAPTURING: switch to a strictly higher-priority camera."""
+        nonlocal reader
+        assert reader is not None
+        result = _try_open(cam_cfg, fmt_cfg, exclude_dev_paths=(reader.device.dev_path,))
+        if result is None:
+            return
+        opened, cand_rank = result
+        if _rank_value(cand_rank) >= _rank_value(current_rank):
+            # No improvement (covers "multiple cameras plugged -> keep showing one").
+            opened.cap.release()
+            log.info(
+                "preempt: best candidate %s rank=%s not higher than current rank=%s; staying",
+                opened.device.dev_path,
+                cand_rank,
+                current_rank,
+            )
+            return
+        log.info(
+            "preempt: switching %s (rank=%s) -> %s (rank=%s)",
+            reader.device.dev_path,
+            current_rank,
+            opened.device.dev_path,
+            cand_rank,
+        )
+        log.info(
+            "negotiated %s %dx%d @ %.1ffps",
+            opened.negotiated.fourcc,
+            opened.negotiated.width,
+            opened.negotiated.height,
+            opened.negotiated.fps,
+        )
+        reader.stop()
+        _enter_capturing(CaptureReader(opened), cand_rank)
 
     try:
         while not stop["flag"]:
@@ -164,13 +234,28 @@ def main() -> int:
                         _enter_searching(f"active device {ev.dev_path} removed")
                 elif ev.action == "add":
                     had_add = True
+                    # An add while CAPTURING may be a higher-priority camera. udev
+                    # fires before the device is ready, so debounce: (re)arm a
+                    # settle timer and re-evaluate once it expires (non-blocking).
+                    if state is State.CAPTURING and preempt_enabled:
+                        pending_preempt_at = now + preempt_settle_sec
+
+            # CAPTURING-state preemption: act once the settle timer expires.
+            if (
+                state is State.CAPTURING
+                and pending_preempt_at is not None
+                and now >= pending_preempt_at
+            ):
+                pending_preempt_at = None
+                _maybe_preempt()
 
             # 2) state-specific work
             if state is State.SEARCHING:
                 if had_add or (now - last_scan_ts) >= RESCAN_INTERVAL_SEC:
                     last_scan_ts = now
-                    opened = _try_open(cam_cfg, fmt_cfg)
-                    if opened is not None:
+                    result = _try_open(cam_cfg, fmt_cfg)
+                    if result is not None:
+                        opened, rank = result
                         log.info(
                             "negotiated %s %dx%d @ %.1ffps",
                             opened.negotiated.fourcc,
@@ -178,7 +263,7 @@ def main() -> int:
                             opened.negotiated.height,
                             opened.negotiated.fps,
                         )
-                        _enter_capturing(CaptureReader(opened))
+                        _enter_capturing(CaptureReader(opened), rank)
                 if state is State.SEARCHING:
                     shm.write(
                         black,
