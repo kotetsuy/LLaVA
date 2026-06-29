@@ -102,6 +102,53 @@ def _matches(dev: CameraDevice, pref: dict) -> bool:
     return False
 
 
+def priority_rank(dev: CameraDevice, preferred: list[dict]) -> int | None:
+    """Index of the first ``preferred`` entry that matches ``dev``.
+
+    Smaller is higher priority. ``None`` means no preferred entry matches (the
+    device would only be selected via the ``fallback`` policy, i.e. lowest
+    priority). When a single physical camera matches several entries, the
+    smallest index wins because we scan ``preferred`` in order.
+    """
+    for i, pref in enumerate(preferred):
+        if _matches(dev, pref):
+            return i
+    return None
+
+
+def select_device_ranked(
+    devices: Iterable[CameraDevice],
+    preferred: list[dict],
+    fallback: str = "any",
+    capture_check: bool = True,
+    format_hint: dict | None = None,
+    exclude_dev_paths: Iterable[str] = (),
+) -> tuple[CameraDevice, int | None] | None:
+    """Pick the highest-priority capture-capable device and its rank.
+
+    Returns ``(device, rank)`` where ``rank`` is the matched ``preferred`` index
+    (``None`` for a ``fallback`` match), or ``None`` if nothing is selectable.
+
+    ``exclude_dev_paths`` skips devices already in use (e.g. the active camera
+    during a CAPTURING-state re-evaluation) so the capture probe never re-opens a
+    live stream. ``fallback`` is ``"any"`` to accept an unlisted camera, anything
+    else (e.g. ``"none"``) to require a ``preferred`` match.
+    """
+    excluded = set(exclude_dev_paths)
+    devs = [d for d in devices if d.dev_path not in excluded]
+    for rank, pref in enumerate(preferred):
+        for d in devs:
+            if _matches(d, pref) and (
+                not capture_check or is_capture_capable(d.dev_path, format_hint)
+            ):
+                return d, rank
+    if fallback == "any":
+        for d in devs:
+            if not capture_check or is_capture_capable(d.dev_path, format_hint):
+                return d, None
+    return None
+
+
 def select_device(
     devices: Iterable[CameraDevice],
     preferred: list[dict],
@@ -110,15 +157,7 @@ def select_device(
     format_hint: dict | None = None,
 ) -> CameraDevice | None:
     """Pick the first preferred + capture-capable device, else fallback policy."""
-    devs = list(devices)
-    for pref in preferred:
-        for d in devs:
-            if _matches(d, pref) and (
-                not capture_check or is_capture_capable(d.dev_path, format_hint)
-            ):
-                return d
-    if fallback == "any":
-        for d in devs:
-            if not capture_check or is_capture_capable(d.dev_path, format_hint):
-                return d
-    return None
+    result = select_device_ranked(
+        devices, preferred, fallback, capture_check, format_hint
+    )
+    return result[0] if result is not None else None

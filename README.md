@@ -216,7 +216,7 @@ ls /dev/v4l/by-id              # is the USB camera symlinked?
 v4l2-ctl --list-devices        # (sudo apt install v4l-utils)
 ```
 
-If your camera doesn't match `camera.preferred[].by_id` in `config.yaml`, the `fallback: any` policy still picks something. To force a specific camera, edit `by_id: usb-Vendor_Model*`.
+`camera.preferred` in `config.yaml` is an ordered priority list — add one entry per camera (`by_id` glob or `vid_pid`) and the highest-ranked connected one is shown. If none match, `fallback: any` still picks something (`fallback: none` refuses unlisted cameras). Cameras can be hot-swapped while running: unplug the active one and it reconnects to the next listed camera; plug in a higher-priority camera and it switches over automatically (set `preempt: false` to keep the current feed).
 
 ### Browser shows a black image or status is stuck at `stream error`
 

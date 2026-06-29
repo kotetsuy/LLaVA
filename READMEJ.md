@@ -215,7 +215,7 @@ ls /dev/v4l/by-id              # USB カメラの symlink が出るか
 v4l2-ctl --list-devices        # (要 sudo apt install v4l-utils)
 ```
 
-`config.yaml` の `camera.preferred[].by_id` が手元のカメラ名と一致しない場合は `fallback: any` 経由で適当に選ばれます。特定のカメラを優先したいときは `by_id: usb-Vendor_Model*` を編集。
+`config.yaml` の `camera.preferred` は優先順位つきリストです。カメラ 1 台につき 1 エントリ (`by_id` glob か `vid_pid`) を並べると、接続中で最上位のカメラが選ばれます。どれも一致しなければ `fallback: any` で適当に選ばれます (`fallback: none` なら未登録カメラは使わない)。動作中のホットスワップにも対応: 使用中のカメラを抜くと次の登録カメラへ繋ぎ直し、より優先度の高いカメラを挿すと自動で乗り換えます (`preempt: false` で現在の映像を維持)。
 
 ### ブラウザに映像が出ない / ステータスが `stream error` のまま
 

@@ -41,7 +41,7 @@ A single NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1150, 48 GB unified) runs four con
 - USB `ID_VENDOR_ID` / `ID_MODEL_ID` are read so specs like `vid_pid="046d:0892"` work
 - The stable `/dev/v4l/by-id/...` symlink (when present) becomes `by_id`
 - A single USB camera often exposes multiple v4l nodes (`index0` for video, `index1` for metadata, etc.); `is_capture_capable()` filters to nodes where `cv2.VideoCapture.read()` actually succeeds
-- `config.yaml`'s `camera.preferred[]` is matched (glob `usb-Logitech*` or VID:PID) → falls through to `fallback: any`
+- `config.yaml`'s `camera.preferred[]` is an **ordered priority list** of cameras (each entry one camera via `by_id` glob or `vid_pid`). `select_device_ranked()` returns the highest-priority capture-capable match plus its rank (the `preferred` index; `None` = matched only via `fallback`). `fallback: any` accepts an unlisted camera; `fallback: none` requires a `preferred` match. So with several listed cameras connected, only the top-ranked one is shown
 
 ### 2.2 Format negotiation (`format_negotiator.py`)
 
@@ -62,8 +62,38 @@ We try the `cv2.VideoCapture.set(CAP_PROP_FOURCC, ...)` ladder in `MJPG → YUYV
   - `SEARCHING`: no working capture. Writes a black frame + `connected=False` to SHM at 30 fps so consumers immediately see "no camera"
   - `CAPTURING`: a separate `CaptureReader` daemon thread runs `cv2.VideoCapture.read()`; the main thread writes to SHM
 - `CaptureReader` exists because `cv2.VideoCapture.read()` can block when the device is yanked; the daemon thread reads continuously, and `cap.release()` on stop unsticks the read
-- An `add` event triggers an immediate rescan; a `remove` event for the active dev_path transitions to SEARCHING
+- A `remove` event for the active dev_path transitions to SEARCHING, which rescans and reconnects to any remaining listed camera
+- An `add` event in SEARCHING triggers an immediate rescan. An `add` in CAPTURING arms a `preempt_settle_sec` debounce timer (udev fires before the device is ready); when it expires, the loop re-evaluates excluding the active dev_path and, **only if a strictly higher-priority camera appeared**, opens it first and then swaps the `CaptureReader` (so no black frame is inserted). A lower- or equal-priority `add` is ignored — that is what keeps "show only one when several are plugged." Set `preempt: false` to disable live switching
 - The MJPEG stream reads through the SHM, so swapping cameras does not break the `<img src="/stream.mjpg">` connection (the HTTP stream stays alive, with black frames bridging the gap until the live feed returns)
+
+### 2.5 Adding a camera
+
+Enabling a new USB camera is just one entry in `config.yaml`'s `camera.preferred[]` — no code changes.
+
+1. **Find its identifier** — plug the camera in and run `uv run list-cameras`. Rows with `CAPTURE = yes` are the nodes that can deliver frames (one camera exposes several nodes: `index0` for video, `index1` for metadata, etc.). Note that row's `BY-ID` (= `by_id`) or `VID:PID` (= `vid_pid`).
+
+   ```
+   CAPTURE  DEV            VID:PID     BY-ID
+   yes      /dev/video0    056e:701a   usb-Alcor_Micro__Corp._ELECOM_2MP_Webcam-video-index0
+   no       /dev/video1    056e:701a   usb-Alcor_Micro__Corp._ELECOM_2MP_Webcam-video-index1
+   ```
+
+2. **Pick the identifier** — use `by_id` when you need to distinguish individual units of the same model (unique if the `BY-ID` carries a serial; the trailing part can be a `*` glob), or `vid_pid` for a quick model-level match (compared lowercased, exact). Write **only one** of them per entry.
+
+3. **Append it to `camera.preferred[]`** — the list is **highest priority first**. With several listed cameras connected, only the top-ranked match is shown. Put it first to make it the top choice, or last for fallback treatment (used only when nothing higher matches). `name` is a free-form label for logs and is not used by the selection logic.
+
+   ```yaml
+   camera:
+     preferred:
+       - name: 2k-usb-camera          # rank 0 (top priority)
+         by_id: usb-DC474C08_..._2K_USB_Camera_...*
+       - name: elecom-2mp             # last = fallback treatment
+         by_id: usb-Alcor_Micro__Corp._ELECOM_2MP_Webcam-video-index0
+   ```
+
+4. **Apply it** — restart capture to reload the edited `config.yaml` (`./stop_all.sh && ./start_all.sh`). With `preempt: true`, hot-plugging a higher-priority camera while running also switches over automatically, but the config edit itself takes effect on restart.
+
+> With `fallback: any` (the default), a camera not listed in `preferred` still connects at the lowest priority. Set `fallback: none` to use **only** the cameras listed in `preferred`.
 
 ---
 
