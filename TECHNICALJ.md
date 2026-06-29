@@ -10,7 +10,7 @@
 
 ![Pipeline architecture](./docs/01_pipeline_architecture.svg)
 
-NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1151, 48 GB unified) 1 台のうえで 4 つの並走コンポーネントを動かし、Chrome へ MJPEG (`/stream.mjpg`) + WebSocket で配信します。
+NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1150, 48 GB unified) 1 台のうえで 4 つの並走コンポーネントを動かし、Chrome へ MJPEG (`/stream.mjpg`) + WebSocket で配信します。
 
 | コンポーネント | プロセス | 入力 | 出力 |
 |---|---|---|---|

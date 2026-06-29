@@ -31,7 +31,7 @@ for arg in "$@"; do
 done
 
 # ROCm env (mirrors CLAUDE.md whisperx setup; safe to set per-pane).
-ENV_PREFIX='export HSA_OVERRIDE_GFX_VERSION=11.5.1 ROCM_PATH=/opt/rocm HIP_VISIBLE_DEVICES=0; '
+ENV_PREFIX='export HSA_OVERRIDE_GFX_VERSION=11.5.0 ROCM_PATH=/opt/rocm HIP_VISIBLE_DEVICES=0; '
 
 if ! command -v tmux >/dev/null; then
     echo "ERROR: tmux is not installed. Install with: sudo apt install tmux" >&2

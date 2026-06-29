@@ -30,12 +30,12 @@ See `LLaVA設計図.pptx` for the screen mock.
 
 | Item | Value |
 |------|------|
-| Machine | NucBox EVO X2 (AMD Ryzen AI MAX+ 395, gfx1151 / RDNA 3.5) |
+| Machine | NucBox EVO X2 (AMD Ryzen AI MAX+ 395, gfx1150 / RDNA 3.5) |
 | Memory | 48 GB unified (BIOS-allocated VRAM) |
 | OS | Ubuntu 24.04.4 LTS (HWE kernel) |
 | ROCm | 7.2.2 (`/opt/rocm` symlink) |
-| Env vars | `HSA_OVERRIDE_GFX_VERSION=11.5.1` |
-| Existing assets | llama.cpp ROCm/HIP build (`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1151`) |
+| Env vars | `HSA_OVERRIDE_GFX_VERSION=11.5.0` |
+| Existing assets | llama.cpp ROCm/HIP build (`-DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1150`) |
 | Existing assets | ROCm PyTorch wheels (from repo.radeon.com) |
 | Existing assets | Practical experience with WhisperX / Ollama / VOICEVOX local AI pipelines |
 

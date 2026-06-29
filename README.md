@@ -13,7 +13,7 @@ For design details see [`HANDOFF.md`](./HANDOFF.md) and [`TECHNICAL.md`](./TECHN
 
 | Item | Expected value |
 |------|------|
-| Machine | NucBox EVO X2 (AMD Ryzen AI MAX+ 395, gfx1151, 48 GB unified) |
+| Machine | NucBox EVO X2 (AMD Ryzen AI MAX+ 395, gfx1150, 48 GB unified) |
 | OS | Ubuntu 24.04.4 LTS (HWE kernel) |
 | ROCm | 7.2.1 (symlinked at `/opt/rocm`) |
 | Python | 3.12 |
@@ -85,7 +85,7 @@ The extra is still named `webrtc` for historical reasons; the current server str
 Add these to `~/.bashrc` so new shells pick them up automatically:
 
 ```bash
-export HSA_OVERRIDE_GFX_VERSION=11.5.1
+export HSA_OVERRIDE_GFX_VERSION=11.5.0
 export ROCM_PATH=/opt/rocm
 export HIP_VISIBLE_DEVICES=0
 ```

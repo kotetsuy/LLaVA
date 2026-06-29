@@ -10,7 +10,7 @@ This document explains how the design from [`HANDOFF.md`](./HANDOFF.md) was impl
 
 ![Pipeline architecture](./docs/01_pipeline_architecture.svg)
 
-A single NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1151, 48 GB unified) runs four concurrent components and serves Chrome over MJPEG (`/stream.mjpg`) + WebSockets.
+A single NucBox EVO X2 (Ryzen AI MAX+ 395, gfx1150, 48 GB unified) runs four concurrent components and serves Chrome over MJPEG (`/stream.mjpg`) + WebSockets.
 
 | Component | Process | Input | Output |
 |---|---|---|---|
